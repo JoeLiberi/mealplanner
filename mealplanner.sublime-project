@@ -1,0 +1,15 @@
+{
+	"folders":
+	[
+		{
+			"path": "~/python/Django_Projects/mealplanner"
+		}
+	],
+	"settings":
+	{
+		"env_file":
+		{
+			"Linux": "~/python/Django_Projects/mealplanner/mealplanner/bin/active",
+		}
+	}
+}
