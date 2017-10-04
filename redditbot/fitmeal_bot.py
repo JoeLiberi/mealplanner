@@ -1,7 +1,8 @@
 from praw import Reddit
 import re, sqlite3
 from sqlite3 import Error
-import os 
+import os, itertools
+from collections import OrderedDict
 
 title_regex = re.compile(r'\[\w+\s\w+\]\s(.+)')
 flair_regex = re.compile(r'\[\w+\s\w+\]')
@@ -12,9 +13,8 @@ cooktime_regex = re.compile(r'Cook Time\s(.+)')
 servings_regex = re.compile(r'Servings\s(.+)')
 ingredients_regex = re.compile(r'\*\s.+', re.MULTILINE)
 instructions_regex = re.compile(r'\d\.\s.+', re.MULTILINE)
-
-# Create the projects table	
-sql_create_projects_table = """ CREATE TABLE IF NOT EXISTS fitmeal (title text PRIMARY KEY,flair text,recipeurl text,nutrition text,preptime text,cooktime text,servings text,ingredients text, instructions text); """
+alpha_regex = re.compile('[\W_]+')
+alpha_keep_spaces_regex = re.compile('[\W_]+[\s]+')
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 database = "{}/fitmeal.db".format(dir_path)
@@ -25,22 +25,52 @@ class FitMealBot():
 	def __init__(self):
 		self.dir_path = os.path.dirname(os.path.realpath(__file__))
 		self.database = "{}/fitmeal.db".format(dir_path)
-		self.sql_create_projects_table = """ CREATE TABLE IF NOT EXISTS fitmeal (
-			title text PRIMARY KEY,
-			flair text,
+		self.sql_create_fitmeal_table = """ CREATE TABLE IF NOT EXISTS fitmeal (
+			id integer PRIMARY KEY AUTOINCREMENT,
+			title text,
+			flair_id integer NOT NULL,
 			recipeurl text,
-			nutrition text,
 			preptime text,
 			cooktime text,
 			servings text,
 			ingredients text, 
-			instructions text); """
+			instructions text
+			); 
+			"""
+
+		self.sql_create_flair_table = """ CREATE TABLE IF NOT EXISTS flair (
+			id integer PRIMARY KEY AUTOINCREMENT,
+			fitmeal_id integer NOT NULL,
+			HighCalorie boolean DEFAULT FALSE,
+			LowCalorie boolean DEFAULT FALSE,
+			HighProtein boolean DEFAULT FALSE,
+			LowProtein boolean DEFAULT FALSE,
+			HighCarb boolean DEFAULT FALSE,
+			LowCarb boolean DEFAULT FALSE,
+			HighFat boolean DEFAULT FALSE,
+			LowFat boolean DEFAULT FALSE, 
+			Vegetarian boolean DEFAULT FALSE,
+			Vegan boolean DEFAULT FALSE,
+			GlutenFree boolean DEFAULT FALSE,
+			DairyFree boolean DEFAULT FALSE,
+			Cheap boolean DEFAULT FALSE,
+			Quick boolean DEFAULT FALSE,
+			Snack boolean DEFAULT FALSE,
+			Meta boolean DEFAULT FALSE,
+			Tip boolean DEFAULT FALSE,
+			Question boolean DEFAULT FALSE,
+			Recipes boolean DEFAULT FALSE,
+			Miscellaneous boolean DEFAULT FALSE,
+			FOREIGN KEY (fitmeal_id) REFERENCES fitmeal (id)
+			); 
+			"""		
 
 		# Create the database when the class is initialized
 		self.conn = self.sqlite_connect()
 		if self.conn is not None:
 			# create projects table
-			self.create_table()
+			self.create_table(self.sql_create_fitmeal_table)
+			self.create_table(self.sql_create_flair_table)
 		else:
 			print("Error! cannot create the database connection.")
 
@@ -54,11 +84,11 @@ class FitMealBot():
 
 		return None
 
-	def create_table(self):
+	def create_table(self, create_table_sql):
 
 		try:
 			c = self.conn.cursor()
-			c.execute(self.sql_create_projects_table)
+			c.execute(create_table_sql)
 		except Error as e:
 			print(e)
 
@@ -71,6 +101,22 @@ class FitMealBot():
 
 		return s
 
+	def create_flair(self, flair):
+
+		sql = "INSERT INTO flair({}) VALUES(?)".format(row_name)
+
+		cur = self.conn.cursor()
+		cur.execute(sql, flair)
+		return cur.lastrowid
+
+	def create_fitmeal(self, meal):
+
+		sql = " INSERT INTO fitmeal(cooktime,ingredients,instructions,preptime,recipeurl,servings,title) VALUES(?, ?, ? ,? ,? ,? ,?)"
+
+		cur = self.conn.cursor()
+		cur.execute(sql, meal)
+		return cur.lastrowid
+		
 
 	def run_bot(self):
 
@@ -82,39 +128,57 @@ class FitMealBot():
 
 		submissions = self.filter_title(subreddit.hot(), title_regex)
 
-		for s in submissions:
-			title = title_regex.search(s.title)
-			flair = flair_regex.findall(s.title)
-			recipeurl = recipeurl_regex.search(s.selftext)
-			nutrition = nutrition_regex.findall(s.selftext)
-			preptime = preptime_regex.search(s.selftext)
-			cooktime = cooktime_regex.search(s.selftext)
-			servings = servings_regex.search(s.selftext)
-			ingredients = ingredients_regex.findall(s.selftext)
-			instructions = instructions_regex.findall(s.selftext)
+		with self.conn:
+			for s in submissions:
+				title = title_regex.search(s.title)
+				flair = flair_regex.findall(s.title)
+				recipeurl = recipeurl_regex.search(s.selftext)
+				preptime = preptime_regex.search(s.selftext)
+				cooktime = cooktime_regex.search(s.selftext)
+				servings = servings_regex.search(s.selftext)
+				ingredients = ingredients_regex.findall(s.selftext)
+				instructions = instructions_regex.findall(s.selftext)
 
-			if recipeurl:
-				print(recipeurl.group(1))
-			else:
-				recipeurl = ''
+				print(s.selftext)
+				
+				rows = {
+					'title' : title, 
+					'recipeurl' : recipeurl, 
+					'preptime' : preptime, 
+					'cooktime' : cooktime, 
+					'servings' : servings, 
+					'ingredients' : ingredients, 
+					'instructions' : instructions}
 
-		# # Prepare SQL query to INSERT a record into the database.
-		# format_str = """INSERT INTO fitmeal(title, flair, recipeurl, nutrition, preptime, cooktime, servings, ingredients, instructions) VALUES ({title}, {flair}, {recipeurl}, {nutrition}, {preptime}, {cooktime}, {servings}, {ingredients}, {instructions});"""
+				for key, value in rows.items():
+					if rows[key]:
+						if isinstance(rows[key], list):
+							value = ''.join(rows[key])
+							rows[key] = value
+						else:
+							v = alpha_keep_spaces_regex.sub('', rows[key].group(1))	
+							rows[key] = v
+					else:
+						rows[key] = None
 
-		# sql = format_str.format(title=title.group(1), , flair=flair, recipeurl=recipeurl, nutrition=nutrition, preptime=preptime, cooktime=cooktime, servings=servings, ingredients=ingredients, instructions=instructions)
+				# Create an empty list and append the values in alpha order based
+				# on the key
+				ordered_rows = []
+				for key in sorted(rows.keys()):
+					ordered_rows.append(rows[key])
 
-			db = self.sqlite_connect()
-			cursor = db.cursor()
+				# self.create_fitmeal(ordered_rows)
 
-			try:
-				cursor.execute("INSERT INTO fitmeal(title, flair, recipeurl, nutrition, preptime, cooktime, servings, ingredients, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-					(title.group(1), flair, recipeurl, nutrition, preptime, cooktime, servings, ingredients, instructions))
-				# Commit your changes in the database
-				db.commit()
-			except Exception as e:
-				print("Shit didnt work\n {}".format(e))
-				# Rollback in case there is any error
-				db.rollback()
+				''' 
+				Loop through the flair, string out the non-alpha chars including spaces.
+				Call the "create_flair" method to enter flair into the sql table.
 
-				# disconnect from server
-				db.close()
+				'''
+				# for f in flair:
+				# 	f = alpha_regex.sub('', f)
+				# 	create_flair(f, True)	
+
+if __name__ == '__main__':
+
+	bot = FitMealBot()
+	bot.run_bot()
